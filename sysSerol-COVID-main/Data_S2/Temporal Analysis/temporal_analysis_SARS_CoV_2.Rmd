@@ -1,0 +1,723 @@
+---
+title: "Temporal analysis of humoral response to SARS-CoV-2"
+---
+
+# Data import 
+
+Load and pre-process the data
+
+```{r load data}
+library(ggplot2)
+library(utils)
+
+rm(list = ls())
+theme_set(theme_classic()) # set theme for whole notebook
+
+# import data
+data <- read.csv("../Data_S1.csv")
+
+# remove data on non-SARS-CoV-2 antigens
+data <- data[, which(!(grepl("HKU1|NL63|flu_mix", colnames(data))))]
+
+# log10 transform bead-based measurements
+ind_log <- which(grepl("FcR", colnames(data)) | grepl("Ig", colnames(data)) | grepl("ADCD", colnames(data)))
+data[, ind_log] <- log10(data[, ind_log]) 
+
+rm(list = setdiff(ls(), c("data")))
+
+
+all_features <- colnames(data)[24:ncol(data)]
+print("Antibody features:")
+print(all_features)
+
+print("Meta data:")
+print(colnames(data)[1:23])
+
+```
+
+Define colors and feature annotation
+
+```{r color}
+my_colors <- list(antigen = c(N = "#774018", RBD = "#67CDD0", S = "#3B8A86", 
+                              `S1 trimer` = "#D38735", S1 = "#224F15", S2 = "#1DB100"),
+                  group = c(Severe = "#F8BA00", Moderate = "#0076BA", Deceased = "#99195E")) 
+
+feature_annot <- data.frame(name = colnames(data)[12:ncol(data)])
+
+feature_annot$antigen <- gsub("trimer", "S1 trimer", gsub(".*_", "", colnames(data)[12:ncol(data)]))
+feature_annot$antigen[which(feature_annot$name == "NT50")] <- "RBD"
+
+# feature without antigen
+feature_annot$feature <- colnames(data)[12:ncol(data)]
+for (ag in c("S1_trimer", "S1", "S2", "S", "RBD", "N")) {
+  feature_annot$feature <- gsub(paste0("_", ag), "", feature_annot$feature)
+}
+
+
+feature_annot$feature_type <- rep(NA, length = length(12:ncol(data)))
+feature_annot$feature_type[which(grepl("Ig", feature_annot$feature))] <- "Titer"
+feature_annot$feature_type[which(grepl("FcR", feature_annot$feature))] <- "FcR"
+feature_annot$feature_type[which(grepl("AD", feature_annot$feature))] <- "Functions"
+feature_annot$feature_type[which(grepl("NT50", feature_annot$feature))] <- "Neutralization"
+
+feature_annot$label <- gsub("_", " ", feature_annot$name)
+feature_annot$label <- gsub("Ralpha", "aR", feature_annot$label)
+feature_annot$label <- gsub("ADNKA ", "ADNKA-", feature_annot$label)
+
+```
+
+# Plot measurements depending on time and fit loess model
+
+To generate Figure 3D, 5B and Supplemental Figure 3.
+
+```{r raw data temporal figure}
+library(RColorBrewer)
+library(ggpubr)
+
+# create folder for figures if it does not exist
+if (!(file.exists("Figures"))) {
+  dir.create(file.path(getwd(), "Figures"))
+}
+
+groups <- c("Severe", "Deceased") # for Figure 3
+#groups <- c("Moderate", "Severe") # for Figure 5
+#groups <- c("Moderate", "Severe", "Deceased") # for Supplemental Figure
+
+
+for (group in groups) {
+  data_use <- data[which(data$group %in% groups), ]
+
+  plt_list <- list()
+  
+  first_flag <- rep(TRUE, length = length(unique(feature_annot$feature)))
+  names(first_flag) <- unique(feature_annot$feature)
+  
+  for (feature in all_features) {
+    antigen <- feature_annot$antigen[which(feature_annot$name == feature)]
+    feature_no_ag <- feature_annot$feature[which(feature_annot$name == feature)]
+    
+    # min max the data across all groups
+    tmp_y <- data_use[, feature]
+    tmp_y <- (tmp_y - min(tmp_y, na.rm = TRUE))/(max(tmp_y, na.rm = TRUE) - min(tmp_y, na.rm = TRUE))
+    
+    # data frame for individual data points of current grouop
+    df_plot_point <- data.frame(days = data_use$days[which(data_use$group == group)],
+                                y = tmp_y[which(data_use$group == group)])
+    
+    # Smoothed
+    loess_model <- loess(y ~ days, data = df_plot_point, span = 0.7)
+    df_pred <- data.frame(days = seq(0, max(df_plot_point$days), by = 0.1))
+    loess_pred <- predict(loess_model, newdata = df_pred)
+    df_plot <- data.frame(days = seq(0, max(df_plot_point$days), by = 0.1),
+                          y = loess_pred)
+    
+    if (first_flag[[feature_no_ag]]) {
+      plt_list[[feature_no_ag]] <-  ggplot(df_plot, aes(x = days, y = y)) +
+          xlab("") + 
+          ylab(feature_no_ag) + #ylab("") + 
+          ylim(c(0,1)) + 
+          #ggtitle(feature_no_ag) + 
+          xlim(c(0, 41)) + 
+          theme(plot.title = element_text(size = 8, hjust = 0.5),
+                plot.margin = unit(c(0.04,0.02,-0.3,0.02), "cm"),
+                axis.line = element_line(colour = 'black', size = 0.3),
+                axis.ticks = element_line(colour = "black", size = 0.3),
+                axis.title = element_text(size = 8), 
+                axis.text = element_text(size = 6, color = "black"))
+      first_flag[[feature_no_ag]] <- FALSE
+    }
+    plt_list[[feature_no_ag]] <-  plt_list[[feature_no_ag]]  + 
+            geom_line(data = df_plot, aes(x = days, y = y),
+                     color = my_colors$antigen[[antigen]])
+  }
+  for (feature in all_features) {
+    antigen <- feature_annot$antigen[which(feature_annot$name == feature)]
+    feature_no_ag <- feature_annot$feature[which(feature_annot$name == feature)]
+    
+    # min max the data across all groups
+    tmp_y <- data_use[, feature]
+    tmp_y <- (tmp_y - min(tmp_y, na.rm = TRUE))/(max(tmp_y, na.rm = TRUE) - min(tmp_y, na.rm = TRUE))
+    
+    # data frame for individual data points of current grouop
+    df_plot_point <- data.frame(days = data_use$days[which(data_use$group == group)],
+                                y = tmp_y[which(data_use$group == group)])
+    
+    # Smoothed
+    loess_model <- loess(y ~ days, data = df_plot_point, span = 0.7)
+    df_pred <- data.frame(days = seq(0, max(df_plot_point$days), by = 0.1))
+    loess_pred <- predict(loess_model, newdata = df_pred)
+    df_plot <- data.frame(days = seq(0, max(df_plot_point$days), by = 0.1),
+                          y = loess_pred)
+
+    plt_list[[feature_no_ag]] <-  plt_list[[feature_no_ag]]  + 
+            geom_point(data = df_plot_point, aes(x = days, y = y), alpha = 0.4, stroke = 0,
+                              size = 0.5, color = my_colors$antigen[[antigen]]) 
+  }
+
+
+  plt <- ggarrange(plotlist = plt_list, ncol = 1, nrow = 17)
+  pdf(paste("Figures/loess_", group, ".pdf", sep = ""), 
+      width = 1.3, height = 15) 
+  print(plt)
+  dev.off()
+}
+
+
+```
+
+# Group-level model selection
+
+Check gradient for log-likelhood
+
+```{r gradient check}
+source('central_differences.R')
+source('load_ab_curves.R')
+source('llh_functions.R')
+
+data_fit_A <- data.frame(t = 1:5, x = 1:5)
+data_fit_B <- data.frame(t = 1:10, x = 0:9)
+
+theta <- runif(6, min = -1, max = 1)
+indA <- c(1,2,3,4)
+indB <- c(1,2,3,5)
+indNoise <- 6
+
+# define likelihood functoin
+llh <- function(theta) {
+  return(llh_laplace_2group(curveFun = abKinetic_4, 
+                            data_A = data_fit_A,
+                            data_B = data_fit_B, 
+                            indA = indA,
+                            indB = indB, 
+                            indNoise = indNoise, 
+                            theta))
+}
+llh_grad <- function(theta) {
+  return(llh_laplace_2group_grad(curveFun = abKinetic_4, 
+                            curveFun_grad = abKinetic_4_grad,
+                            data_A = data_fit_A,
+                            data_B = data_fit_B, 
+                            indA = indA,
+                            indB = indB, 
+                            indNoise = indNoise, 
+                            theta))
+}
+
+central_differences(llh, theta, 0.001)
+llh_grad(theta) 
+print(max(abs(central_differences(llh, theta, 0.001) - llh_grad(theta))))
+
+```
+
+Model selection at group level
+
+```{r model selection}
+library(maxLik)
+library(ggpubr)
+source('multi_start.R')
+source('llh_functions.R')
+source('load_ab_curves.R')
+source('get_indices_groups.R')
+source('annotate_parameters.R')
+
+# create folder for Results if it does not exist
+if (!(file.exists("Results"))) {
+  dir.create(file.path(getwd(), "Results"))
+}
+# create folder for figures if it does not exist
+if (!(file.exists("Figures/all_fits"))) {
+      dir.create(file.path(getwd(), "Figures/all_fits"))
+}
+
+until_day <- 17
+groupA <- "Severe"
+groupB <- "Deceased"
+param_names <- c("a", "b", "c", "d")
+
+# Get indices that map the overall parameter vector to the curve parameter 
+# for the groups and the noise parameter
+indices <-  get_indices_groups(4)
+indAs <- indices$indAs
+indBs <- indices$indBs
+indNoises <- indices$indNoises
+
+model_string <- paste(groupA,  "_", groupB, "_abKinetic_4_laplace_", until_day, sep = "")
+
+# Fit the curves for each individual feature
+for (featureName in all_features) {
+  print(featureName)
+  
+  # Group A
+  data_fit_A <- data[which(data$group == groupA), 
+                           which(colnames(data) %in% c("days", featureName))]
+  # make sure the measurements are numeric
+  data_fit_A$days <- as.numeric(data_fit_A$days)
+  data_fit_A[,2] <- as.numeric(data_fit_A[,2]) 
+  
+  # remove measurements with NA
+  data_fit_A <- data_fit_A[which(!is.na(rowSums(data_fit_A))),]
+  
+  # rename columns
+  colnames(data_fit_A)[which(!(colnames(data_fit_A) == "days"))] <- "x"  
+  colnames(data_fit_A)[which(colnames(data_fit_A) == "days")] <- "t"  
+  
+  # remove later days
+  data_fit_A <- data_fit_A[which(data_fit_A$t <= until_day),]
+  
+  # Group B
+  data_fit_B <- data[which(data$group == groupB), 
+                           which(colnames(data) %in% c("days", featureName))]
+  data_fit_B$days <- as.numeric(data_fit_B$days)
+  data_fit_B[,2] <- as.numeric(data_fit_B[,2])
+  data_fit_B <- data_fit_B[which(!is.na(rowSums(data_fit_B))),]
+  colnames(data_fit_B)[which(!(colnames(data_fit_B) == "days"))] <- "x"  
+  colnames(data_fit_B)[which(colnames(data_fit_B) == "days")] <- "t"  
+  data_fit_B <- data_fit_B[which(data_fit_B$t <= until_day),]
+  
+  # min max the values across both groups
+  min_val <- min(min(data_fit_A$x), min(data_fit_B$x))
+  max_val <- max(max(data_fit_A$x), max(data_fit_B$x)) 
+  data_fit_A$x <- (data_fit_A$x - min_val)/(max_val - min_val)
+  data_fit_B$x <- (data_fit_B$x - min_val)/(max_val - min_val)
+  
+  # initialize output vectors
+  AICs <- rep(NA, length = length(indAs))
+  llhs <- rep(NA, length = length(indAs))
+  
+  plt <- list()
+  list_MS <- list()
+  
+  # fit all possible of combination of differences
+  for (ind_model in 1:length(indAs)) {
+    print(ind_model)
+    
+    # how many starts to perform. for the most complex model, directly assign a high number
+    if (ind_model == length(indAs)) { 
+      n_starts <- 500
+    } else {
+      n_starts <- 50
+    }
+    # indices for the current model
+    indA <- indAs[[ind_model]]
+    indB <- indBs[[ind_model]]
+    indNoise <- indNoises[[ind_model]]
+    
+    # number of overall parameters to be estimated from the data. 
+    # this is not the number of curve parameters!
+    n_param <- indNoise
+    
+    # assign parameter boundaries. the parameters are estimated in log10 space
+    # and the boundaries are provided in log10-space
+    ub = rep(3, n_param)
+    ub[indA[1]] <- 0 # normalized initial anitbody levels need to be below 1
+    ub[indA[2]] <- 2
+    ub[indA[4]] <- log10(1.2) # normalized and antibody levels need to be below 1.2
+    # same boundaries for group A and group B
+    ub[indB[1]] <- ub[indA[1]]
+    ub[indB[2]] <- ub[indA[2]]
+    ub[indB[4]] <- ub[indA[4]]
+    
+    
+    # define log-likelihood function (llh) and its gradient (llh_grad)
+    llh <- function(theta) {
+      return(llh_laplace_2group(curveFun = abKinetic_4, 
+                                data_A = data_fit_A,
+                                data_B = data_fit_B, 
+                                indA = indA,
+                                indB = indB, 
+                                indNoise = indNoise, 
+                                theta))
+    }
+    llh_grad <- function(theta) {
+      return(llh_laplace_2group_grad(curveFun = abKinetic_4, 
+                                curveFun_grad = abKinetic_4_grad,
+                                data_A = data_fit_A,
+                                data_B = data_fit_B, 
+                                indA = indA,
+                                indB = indB, 
+                                indNoise = indNoise, 
+                                theta))
+    }
+    
+    # Perform multi-start optimization
+    result_MS <- multi_start(llh, llh_grad, n_param, n_starts, 
+                            lb = rep(-2, n_param), # lower bound
+                            ub = ub)
+    
+    # check how often the best likelihood value was found within a certain threshold
+    # if its less than 3 times, increase the number of starts and repeat 
+    if (length(which(abs(result_MS$llhs[1] - result_MS$llhs) < 0.1)) < 3 & !(ind_model == length(indAs))) {
+      print(paste("needs more starts to converge: ", featureName, ", model:", 
+                  ind_model, sep = ""))
+      result_MS <- multi_start(llh, llh_grad, n_param, n_starts = 500, 
+                              lb = rep(-2, n_param),  
+                              ub = ub)
+    }
+    
+    # add results to list of all models
+    list_MS[[ind_model]] <- result_MS
+    # Bayesian information criterion (BIC) and Akaike information criterion (AIC)
+    AICs[ind_model] <- -2*result_MS$llhs[1] + n_param*(2)
+    # maximum log-lixelihood value
+    llhs[ind_model] <- result_MS$llhs[1]
+    
+    # Visualization of fitted curve
+    dfPlot_A <- data.frame(t = seq(0, until_day, .01))
+    dfPlot_B <- data.frame(t = seq(0, until_day, .01))
+    
+    # evaluate curves with estimated parameters for both groups
+    dfPlot_A$x <- abKinetic_4(dfPlot_A$t, result_MS$mls[indA,1], logFlag = TRUE)
+    dfPlot_B$x <- abKinetic_4(dfPlot_B$t, result_MS$mls[indB,1], logFlag = TRUE)
+    
+
+    plt[[ind_model]] <- ggplot(dfPlot_A, aes(x = t, y = x)) +
+        geom_point(data = data_fit_A, aes(x = t, y = x), alpha = 0.4, 
+                   size = 0.5, 
+                   color = my_colors$group[[groupA]]) +
+        stat_summary_bin(data = data_fit_A, aes(x = t, y = x), fun = median, geom = "point", size = 1.5, 
+                         shape = 18, alpha = 1, color = my_colors$group[[groupA]], bins = 10)  +
+        geom_point(data = data_fit_B, aes(x = t, y = x), alpha = 0.4, 
+                   size = 0.5, color = my_colors$group[[groupB]]) +
+        stat_summary_bin(data = data_fit_B, aes(x = t, y = x), fun = median, geom = "point", size = 1.5, 
+                         shape = 18, alpha = 1, color = my_colors$group[[groupB]], bins = 10)  +
+        geom_line(data = dfPlot_A, aes(x = t, y = x), color =  my_colors$group[[groupA]]) +
+        geom_line(data = dfPlot_B, aes(x = t, y = x), color =  my_colors$group[[groupB]]) +
+        ylab(feature_annot$label[which(feature_annot$name == featureName)]) + 
+        xlab("days") + 
+        theme(plot.title = element_text(size = 10)) +
+        ggtitle(paste("AIC", formatC(AICs[[ind_model]], digits = 3, format = "f"), 
+                      "\nllh", formatC(llhs[[ind_model]], digits = 3, format = "f"), "\nn_param", n_param))
+    
+    # if there are differences, annotate them with the corresponding letters of the parameter in the left corner
+    # using the function annotate_parameters
+    if (length(param_names[which(indB - indA > 0)]) > 0) {
+      diff_mls <- result_MS$mls[indA, 1] - result_MS$mls[indB, 1]
+      plt[[ind_model]] <- annotate_parameters(plt[[ind_model]], 
+                                              param_names[which(indB - indA > 0)],
+                                              my_colors$group[c(groupA, groupB)[0.5*(sign(-diff_mls[which(indB - indA > 0)]) + 3)]])   
+    }
+  }
+  
+  # collect all the results for this feature and save it
+  all_results <- list(featureName = featureName,  
+                      data_A = data_fit_A, 
+                      data_B = data_fit_B, 
+                      indAs = indAs, 
+                      indBs = indBs, 
+                      indNoises = indNoises, 
+                      list_MS = list_MS,
+                      AICs = AICs)
+  
+  saveRDS(all_results, file = paste("Results/results_", featureName, "_", model_string, ".RDS", sep = ""))
+  
+  plts <- ggarrange(plotlist = plt, nrow = ind_model/8, ncol = 8, 
+                 common.legend = TRUE, legend = "bottom")
+  pdf(paste("Figures/all_fits/models_", featureName, "_",  model_string, ".pdf", sep = ""), 
+      width = 17, 
+      height = 2.5 * ind_model/8) 
+  print(plts)
+  dev.off()
+}
+```
+
+# Plot models
+
+To generate Figure 4C.
+
+Plot the model with the best AIC for each, if deltaAIC < 10 to the 'no difference' model, plot 'no difference' model
+
+```{r plot fits}
+source('load_ab_curves.R')
+source('annotate_parameters.R')
+
+until_day <- 17
+groupA <- "Severe"
+groupB <- "Deceased"
+param_names <- c("a", "b", "c", "d")
+
+plt_list <- list()
+count <- 1
+model_string <- paste(groupA,  "_", groupB, "_abKinetic_4_laplace_", until_day, sep = "")
+
+# for collecting all the AICs to later order the features and extract the top differences
+all_feat_AICs <- rep(NA, length = length(all_features))
+
+for (featureName in all_features) {
+  all_results <- readRDS(file = paste("Results/results_", featureName, "_", model_string, ".RDS", sep = ""))
+  
+  # get best model, if 'no difference' model cannot be rejected, use the no difference model
+  ind_model <- which(all_results$AICs == min(all_results$AICs))
+  if (ind_model > 1 & (all_results$AICs[[1]] - min(all_results$AICs) < 10)) { 
+    ind_model <- 1
+  }
+  
+  result_MS <- all_results$list_MS[[ind_model]]
+  data_fit_A <- all_results$data_A
+  data_fit_B <- all_results$data_B
+  indA <- all_results$indAs[[ind_model]]
+  indB <- all_results$indBs[[ind_model]]
+  indNoise <- all_results$indNoises[[ind_model]]
+  
+  # add AIC difference to 'no difference' model to vector
+  all_feat_AICs[count] <- all_results$AICs[[1]] - min(all_results$AICs)
+  names(all_feat_AICs)[count] <- featureName
+  
+  # evaluate curves using estimated parameters
+  dfPlot_A <- data.frame(t = seq(0, until_day, .01))
+  dfPlot_B <- data.frame(t = seq(0, until_day, .01))
+  dfPlot_A$x <- abKinetic_4(dfPlot_A$t, result_MS$mls[indA,1], logFlag = TRUE)
+  dfPlot_B$x <- abKinetic_4(dfPlot_B$t, result_MS$mls[indB,1], logFlag = TRUE)
+  
+  # visualize
+  plt_list[[count]] <- ggplot(dfPlot_A, aes(x = t, y = x)) +
+    geom_point(data = data_fit_A, aes(x = t, y = x), alpha = 0.6, stroke = 0,
+               size = 0.8, color = my_colors$group[[groupA]]) +
+    stat_summary_bin(data = data_fit_A, aes(x = t, y = x), fun = median, geom = "point", size = 1.5, 
+                     shape = 18, alpha = 1, color = my_colors$group[[groupA]], bins = 10)  +
+    geom_point(data = data_fit_B, aes(x = t, y = x), alpha = 0.6, stroke = 0,
+               size = 0.8, color = my_colors$group[[groupB]]) +
+    stat_summary_bin(data = data_fit_B, aes(x = t, y = x), fun = median, geom = "point", size = 1.2, 
+                     shape = 18,alpha = 1, color = my_colors$group[[groupB]], bins = 10)  +
+    geom_line(data = dfPlot_A, aes(x = t, y = x), color = my_colors$group[[groupA]]) +
+    geom_line(data = dfPlot_B, aes(x = t, y = x), color = my_colors$group[[groupB]]) +
+    ylab("") + 
+    xlab("") + 
+    ggtitle(feature_annot$label[which(feature_annot$name == featureName)]) +
+    theme(axis.text = element_text(color = "black", size = 6),
+          plot.margin = unit(c(0,-.5,-.5,-.5), "lines"),
+          axis.line = element_line(colour = 'black', size = 0.3),
+          axis.ticks = element_line(colour = "black", size = 0.3),
+          plot.title = element_text(size = 8, hjust = 0.5, face = "bold",
+                                    color = my_colors$antigen[[feature_annot$antigen[which(feature_annot$name ==
+                                                                                         featureName)]]])) 
+  # annotate different parameters 
+  if (length(param_names[which(indB - indA > 0)]) > 0) {
+    diff_mls <- result_MS$mls[indA, 1] - result_MS$mls[indB, 1]
+    plt_list[[count]] <- annotate_parameters(plt_list[[count]], 
+                                             param_names[which(indB - indA > 0)],
+                                             my_colors$group[c(groupA, groupB)[0.5*(sign(-diff_mls[which(indB - indA > 0)]) + 3)]])   
+  }
+  count <- count + 1
+}
+
+# Plot the best model for each of the features
+plts <- ggarrange(plotlist = plt_list, nrow = 14, ncol = 6, 
+               common.legend = TRUE, legend = "bottom")
+pdf(paste("Figures/model_bestAICs_", model_string, ".pdf", sep = ""), 
+    width = 10, 
+    height = 17.5) 
+print(plts)
+dev.off()
+
+# plts <- ggarrange(plotlist = plt_list[rev(order(all_feat_AICs))[1:10]], nrow = 2, ncol = 5, 
+#                common.legend = TRUE, legend = "bottom")
+# pdf(paste("Figures/model_top10_bestAICs_", model_string, ".pdf", sep = ""), 
+#     width = 8, 
+#     height = 3) 
+# print(plts)
+# dev.off()
+# 
+# #Save the top 10 differences individually
+# for (ind_top in 1:10) {
+#   pdf(paste("Figures/model_top", ind_top, "_", model_string, ".pdf", sep = ""),
+#       width = 1.3, height = 1.3)
+#   print(plt_list[rev(order(all_feat_AICs))[ind_top]])
+#   dev.off()
+# }
+```
+
+# AIC 
+
+To generate Figure 4A
+
+```{r AICs}
+library(pals)
+source('load_ab_curves.R')
+source('get_indices_groups.R')
+source('get_all_AICs.R')
+
+groupA <- "Severe"
+groupB <- "Deceased"
+model_string <- paste(groupA, "_", groupB, "_abKinetic_4_laplace_", until_day, sep = "")
+
+# get all AIC for this model
+all_AICs <- get_all_AICs(model_string, all_features)
+
+# Calculate delta AICs = AIC - min(AIC)
+delta_AICs <- matrix(NA, nrow = nrow(all_AICs), ncol = ncol(all_AICs))
+rownames(delta_AICs) <- rownames(all_AICs) 
+for (ind_row in 1:nrow(all_AICs)) {
+  delta_AICs[ind_row,] <- all_AICs[ind_row,] - min(all_AICs[ind_row,])
+}
+
+# Data frame with delta AIC to no difference model for all features
+df_AIC <- data.frame(feature = rownames(delta_AICs),
+                    label = feature_annot$feature[match(rownames(delta_AICs), feature_annot$name)],
+                    delta_AIC = delta_AICs[,1])
+# add annotations/labels
+df_AIC$antigen <- feature_annot$antigen[match(rownames(delta_AICs), feature_annot$name)]
+df_AIC <- df_AIC[rev(order(df_AIC$delta_AIC)),] # order the features with decreasing evidence of difference
+df_AIC$feature <- factor(df_AIC$feature, levels = df_AIC$feature)
+
+
+pltBar <- ggplot(df_AIC, aes(x = feature, y = delta_AIC, fill = antigen)) + 
+  geom_bar(stat = "identity") + 
+  scale_fill_manual(values = my_colors$antigen) + 
+  scale_x_discrete(breaks = df_AIC$feature, label = feature_annot$feature[match(df_AIC$feature, feature_annot$name)]) + 
+  theme(axis.line = element_line(colour = 'black', size = 0.3),
+        axis.ticks = element_line(colour = "black", size = 0.3),
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, color = "black", size = 5),
+        axis.text.y = element_text(color = "black", size = 6),
+        axis.title = element_text(size = 8),
+        legend.position = "none") + 
+  geom_hline(yintercept = 10, size = 0.2) + # indicate commonly used threshold of delta AIC = 10
+  ylab(expression(paste(Delta, "AIC"))) + xlab("") 
+  
+pdf(paste("Figures/deltaAIC_", model_string, ".pdf", sep = ""), width = 6.7, height = 2) 
+print(pltBar)
+dev.off()
+
+```
+
+# Feature enrichment analysis 
+
+To generate Figure 4E-G
+
+```{r Enrichment}
+library(fgsea)
+df_AIC <- df_AIC[which(!(grepl("NT50", df_AIC$feature))),] # remove neutralization because its only a set of size one
+df_AIC$feature_type <- feature_annot$feature_type[match(df_AIC$feature, feature_annot$name)]
+
+pw <- list() # list of 'pathways' to check for enrichment
+# antigens:
+for (ind_ag in unique(df_AIC$antigen)) {
+  pw[[ind_ag]] <- factor(df_AIC$feature[which(df_AIC$antigen == ind_ag)], 
+                         levels = unique(df_AIC$feature[which(df_AIC$antigen == ind_ag)]))
+}
+# feature types (titer/FcR/functions)
+for (ind_feat in unique(df_AIC$feature_type)) {
+  pw[[ind_feat]] <- factor(df_AIC$feature[which(df_AIC$feature_type == ind_feat)],
+                           levels = unique(df_AIC$feature[which(df_AIC$feature_type == ind_feat)]))
+}
+# individual features
+for (ind_feat in unique(df_AIC$label)) {
+  pw[[ind_feat]] <- factor(df_AIC$feature[which(df_AIC$label == ind_feat)], 
+                           levels = unique(df_AIC$feature[which(df_AIC$label == ind_feat)]))
+}
+
+ranks <- df_AIC$delta_AIC
+names(ranks) <- df_AIC$feature
+fgsea_res <- fgsea(pathways = pw, 
+                   stats = ranks,
+                   minSize = 2,
+                   maxSize = 100,
+                   nperm = 10000)
+df_fgsea <- data.frame(pval = fgsea_res$pval, 
+                       group = gsub("_", " ", fgsea_res$pathway), 
+                       ES = fgsea_res$ES, 
+                       NES = fgsea_res$NES, 
+                       comp = rep(paste(groupA, groupB), nrow(fgsea_res)))
+
+# Visualize the enrichment analysis results
+df_fgsea$comp <- factor(df_fgsea$comp, levels = levels(df_fgsea$comp))
+df_fgsea$group <- factor(df_fgsea$group, levels = (c("IgG1", "IgG2", "IgG3", 
+                                                      "IgA1", "IgA2", "IgM",
+                                                      "FcRalpha", "FcR2A", "FcR2B", "FcR3A", "FcR3B",
+                                                      "ADCP", "ADNP", "ADCD", 
+                                                      "ADNKA CD107a", "ADNKA MIP1b",
+                                                      "S",  "RBD", "N", "S1 trimer","S1", "S2",
+                                                      "Titer", "FcR", "Functions")))
+plt_all <- ggplot(data = df_fgsea, aes(x = group, y = comp, fill = NES)) +
+                      geom_tile() +
+                      theme_minimal() + xlab("") + ylab("") +
+                      theme(legend.position = "bottom",
+                            axis.text.y = element_blank(),,
+                            axis.text.x = element_text(angle = 90, size = 6, vjust = 0.5, hjust = 1,  color = "black")) + 
+                      scale_fill_gradientn(colors = coolwarm(100)[51:100],
+                                           limits = c(min(df_fgsea$NES), max(df_fgsea$NES)))
+
+pdf(paste("Figures/enrichment_", model_string, "_all.pdf", sep = ""), 
+      width = 5, 
+      height = 2) 
+print(plt_all)
+dev.off()
+
+```
+
+# Model averaged parameter differences
+
+To generate Figure 4D
+
+```{r model averaging}
+library(pheatmap)
+library(RColorBrewer)
+
+source('load_ab_curves.R')
+source('get_indices_groups.R')
+source('get_all_AICs.R')
+
+indices <- get_indices_groups(4)
+indAs <- indices$indAs
+indBs <- indices$indBs
+indNoises <- indices$indNoises
+
+all_AICs <- get_all_AICs(model_string, all_features)
+delta_AICs <- matrix(NA, nrow = dim(all_AICs)[1], ncol = dim(all_AICs)[2])
+rownames(delta_AICs) <- rownames(all_AICs) 
+
+for (indRow in 1:nrow(all_AICs)) {
+  delta_AICs[indRow,] <- all_AICs[indRow,] - min(all_AICs[indRow,])
+}
+
+# calculate Akaike weights
+Akaike_weights <- exp(-0.5 * delta_AICs)
+Akaike_weights <- Akaike_weights / rowSums(Akaike_weights)
+
+params <- matrix(0, nrow = nrow(Akaike_weights), ncol = 8)
+colnames(params) <- c("a1", "b1", "c1", "d1", "a2", "b2", "c2", "d2")
+rownames(params) <- all_features
+
+for (feature in all_features) {
+  res <- readRDS(file = paste("Results/results_", feature, "_", model_string, ".RDS", sep = ""))
+  for (ind_model in 1:length(indAs)) {
+    indParams <- which(indBs[[ind_model]] - indAs[[ind_model]] > 0)
+    res$list_MS[[ind_model]]$mls[indAs[[ind_model]], 1]
+    res$list_MS[[ind_model]]$mls[indBs[[ind_model]], 1]
+    
+    # Group A
+    params[feature, 1:4] <- params[feature, 1:4] + Akaike_weights[feature, ind_model] *
+      res$list_MS[[ind_model]]$mls[indAs[[ind_model]], 1]
+    
+    # Group B
+    params[feature, 5:8] <- params[feature, 5:8] + Akaike_weights[feature, ind_model] *
+      res$list_MS[[ind_model]]$mls[indBs[[ind_model]], 1]
+    
+  }
+}
+
+diffs <- matrix(NA, nrow = nrow(params), ncol = 4)
+colnames(diffs) <- c("a", "b", "c", "d")
+rownames(diffs) <- rownames(params)
+
+diffs[,1] <- params[,1] - params[,5] #a
+diffs[,2] <- params[,2] - params[,6] #b
+diffs[,3] <- params[,3] - params[,7] #c
+diffs[,4] <- params[,4] - params[,8] #d
+
+# Normalize per parameters
+diffs[,1] <- diffs[,1]/abs(max(diffs[,1]))
+diffs[,2] <- diffs[,2]/abs(max(diffs[,2]))
+diffs[,3] <- diffs[,3]/abs(max(diffs[,3]))
+diffs[,4] <- diffs[,4]/abs(max(diffs[,4]))
+
+pheat <- pheatmap(t(diffs), cellwidth = 10, cellheight = 13, 
+                  cluster_rows = FALSE, 
+                  cluster_cols = FALSE, border_color = NA, 
+                  breaks = seq(-1, 1, length = 100), size = 4,
+                  color = c(colorRampPalette(c(my_colors$group["Deceased"], "white"))(50),
+                            colorRampPalette(c("white", my_colors$group["Severe"]))(50)))
+pdf(paste("Figures/heatmap_parameter_differences_normalized.pdf", sep = ""),   
+    width = 13, height = 5) 
+print(pheat)
+dev.off()
+```
