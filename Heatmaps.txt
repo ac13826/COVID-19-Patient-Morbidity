@@ -1,0 +1,29 @@
+import seaborn as sns #Tbh don't really know what these do but they were in the tutorial I followed ╰( ･ ᗜ ･ )╯
+import numpy as np 
+import pandas as pd 
+import matplotlib.pyplot as plt 
+import os
+%matplotlib inline 
+CovDataUrl = 'https://raw.githubusercontent.com/meyer-lab/sysSerol-COVID/main/Data%20File/CovData.csv'
+CovData = pd.read_csv(CovDataUrl) #Reads in CovData from the URL
+SampleID_Order = [21,20,18,16,14,13,10,9,6,5,4,3,19,17,15,12,11,8,7,2,1,0] #To order convalescent first and then dead
+
+
+
+Heat_S = CovData.drop(index = [22], columns = ['SampleID','Outcome', 'Sex', 'Race', 'Age', 'Collection_From_Onset', 'Admit_From_Onset', 'Remdesivir',
+'Antibiotics','Chloroquines','Tocilizumab','Ards','Viral_Load','RBD IgG1','N IgG1','RBD IgG2','N IgG2','RBD IgG3','N IgG3','RBD IgG4','N IgG4','RBD IgA1',
+'N IgA1','RBD IgA2','N IgA2','RBD IgM','N IgM','RBD FcRg2A','N FcRg2A','RBD FcRg2b','N FcRg2b','RBD FcRg3A','N FcRg3A','RBD SNA','N SNA','RBD RCA','N RCA',
+'RBD ADCP','N ADCP','RBD ADNP','N ADNP','RBD ADCD','N ADCD','RBD NKD-CD107a','N NKD-CD107a','RBD NKD-MIP1b','N NKD-MIP1b']) #Removes all of the non Spike Columns
+and the Control Row from the data, I think there's a tensorview function or something that already separates them but idk how to use it yet (╯°Д°)╯ ┻━┻
+
+Heat_S = Heat_S.reindex(index = SampleID_Order) #Reorganizes the data according to SampleID_Order, essentially just changes the order the of the rows in the data so index 21 
+(which is technically patient 22) appears as the top row and index 0 (technically patient 1) appears as the bottom row
+
+Heat_S_zscore = (Heat_S - Heat_S.mean())/Heat_S.std() #Zscores all of the data
+
+Heat_S_display = sns.heatmap(Heat_S_zscore, cmap = "vlag", vmin = -2.5, vmax = 2.5, yticklabels = False) #Heatmap function, cmap chooses the color palette, vmin and vmax set the range, 
+yticklabels = false removes the y axis lables. This heat map plots the rows starting from the top, so (looking at SampleID_Order) 21 (patient 22) will be the top row since it comes first,
+followed by 20, 18, 16 etc and 0 will be at the bottom
+#I think printing out Heat_S before and after the reindex function will also see what's happening!
+#Seaborn heatmap stuff! https://seaborn.pydata.org/generated/seaborn.heatmap.html
+#I esentially copied this for each heatmap just taking out different columns!
